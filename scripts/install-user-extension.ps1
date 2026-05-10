@@ -10,7 +10,8 @@ $requiredFiles = @(
     'extension.mjs',
     'db.mjs',
     'mesh.mjs',
-    'transport-local-sqlite.mjs'
+    'transport-local-sqlite.mjs',
+    'work-context.mjs'
 )
 
 foreach ($file in $requiredFiles) {

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { openAgentRelayDatabase } from "../src/db.mjs";
+import { migrateDatabase, openAgentRelayDatabase } from "../src/db.mjs";
 import {
     AmbiguousTargetError,
     LocalSqliteTransport,
@@ -96,6 +96,90 @@ test("ignores stale aliases when resolving targets", async () => {
     });
 });
 
+test("resolves sessions by directory name and repository name", async () => {
+    await withTransport((transport) => {
+        transport.registerSession({
+            sessionId: "devcron",
+            alias: "worker",
+            cwd: "C:\\src\\DevCronAgents",
+            repoRoot: "C:\\src\\DevCronAgents",
+            repoName: "DevCronAgents",
+            now: 1000,
+        });
+        transport.registerSession({
+            sessionId: "android-one",
+            cwd: "C:\\src\\xplat-Android-MDM\\app",
+            repoRoot: "C:\\src\\xplat-Android-MDM",
+            repoName: "xplat-Android-MDM",
+            now: 1000,
+        });
+        transport.registerSession({
+            sessionId: "android-two",
+            cwd: "C:\\src\\xplat-Android-MDM\\service",
+            repoRoot: "C:\\src\\xplat-Android-MDM",
+            repoName: "xplat-Android-MDM",
+            now: 1000,
+        });
+
+        const [directoryTarget] = transport.resolveTargets("DevCronAgents", {
+            targetType: "directory",
+            now: 1100,
+        });
+        assert.equal(directoryTarget.sessionId, "devcron");
+
+        const repoTargets = transport.resolveTargets("xplat-Android-MDM", {
+            targetType: "repo",
+            allowMultiple: true,
+            now: 1100,
+        });
+        assert.deepEqual(repoTargets.map((session) => session.sessionId).sort(), ["android-one", "android-two"]);
+    });
+});
+
+test("enqueues to all matching repository sessions when requested", async () => {
+    await withTransport((transport) => {
+        transport.registerSession({ sessionId: "sender", alias: "sender", cwd: "C:\\src", now: 1000 });
+        transport.registerSession({
+            sessionId: "one",
+            cwd: "C:\\src\\repo\\one",
+            repoRoot: "C:\\src\\repo",
+            repoName: "repo",
+            now: 1000,
+        });
+        transport.registerSession({
+            sessionId: "two",
+            cwd: "C:\\src\\repo\\two",
+            repoRoot: "C:\\src\\repo",
+            repoName: "repo",
+            now: 1000,
+        });
+
+        assert.throws(
+            () =>
+                transport.enqueueMessages({
+                    senderSessionId: "sender",
+                    target: "repo",
+                    targetType: "repo",
+                    body: "ambiguous unless all",
+                    now: 1100,
+                }),
+            AmbiguousTargetError
+        );
+
+        const messages = transport.enqueueMessages({
+            senderSessionId: "sender",
+            target: "repo",
+            targetType: "repo",
+            allowMultiple: true,
+            body: "all repo agents",
+            now: 1100,
+        });
+
+        assert.equal(messages.length, 2);
+        assert.deepEqual(messages.map((message) => message.targetSessionId).sort(), ["one", "two"]);
+    });
+});
+
 test("prevents duplicate claims across two database connections", async () => {
     await withTransport(async (first, dbPath) => {
         const secondDb = await openAgentRelayDatabase(dbPath);
@@ -114,4 +198,27 @@ test("prevents duplicate claims across two database connections", async () => {
             second.close();
         }
     });
+});
+
+test("migrates existing databases before creating repo indexes", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "agent-relay-old-schema-"));
+    const dbPath = join(dir, "agent-relay.sqlite");
+    const db = await openAgentRelayDatabase(dbPath);
+    try {
+        db.exec("DROP INDEX IF EXISTS idx_sessions_repo_name;");
+        db.exec("CREATE TABLE old_sessions AS SELECT session_id, alias, cwd, workspace_path, pid, transport, account_hint, status, created_at, updated_at, last_seen_at FROM sessions;");
+        db.exec("DROP TABLE sessions;");
+        db.exec("ALTER TABLE old_sessions RENAME TO sessions;");
+
+        migrateDatabase(db);
+        const columns = db.prepare("PRAGMA table_info(sessions)").all().map((row) => row.name);
+        assert.equal(columns.includes("repo_root"), true);
+        assert.equal(columns.includes("repo_name"), true);
+
+        db.prepare("INSERT INTO sessions (session_id, cwd, repo_name, status, created_at, updated_at, last_seen_at) VALUES (?, ?, ?, 'active', ?, ?, ?)")
+            .run("session", "C:\\src\\repo", "repo", 1000, 1000, 1000);
+    } finally {
+        db.close();
+        await rm(dir, { recursive: true, force: true });
+    }
 });

@@ -2,7 +2,7 @@ import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 export function getDefaultDatabasePath(env = process.env) {
     const override = env.AGENT_RELAY_DB?.trim();
@@ -45,6 +45,8 @@ export function migrateDatabase(db) {
             session_id TEXT PRIMARY KEY,
             alias TEXT,
             cwd TEXT,
+            repo_root TEXT,
+            repo_name TEXT,
             workspace_path TEXT,
             pid INTEGER,
             transport TEXT NOT NULL DEFAULT 'local-sqlite',
@@ -85,7 +87,10 @@ export function migrateDatabase(db) {
             ON messages(status, updated_at);
     `);
 
+    addColumnIfMissing(db, "sessions", "repo_root", "TEXT");
+    addColumnIfMissing(db, "sessions", "repo_name", "TEXT");
     addColumnIfMissing(db, "messages", "delivery_mode", "TEXT NOT NULL DEFAULT 'queued'");
+    db.exec("CREATE INDEX IF NOT EXISTS idx_sessions_repo_name ON sessions(repo_name);");
 
     db.prepare(`
         INSERT INTO metadata (key, value)

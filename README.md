@@ -51,18 +51,32 @@ AgentRelay registers these Copilot CLI extension tools:
 
 | Tool | Purpose |
 | --- | --- |
-| `agent_relay_whoami` | Show this session's AgentRelay identity, alias, cwd, workspace, and database path. |
+| `agent_relay_whoami` | Show this session's AgentRelay identity, alias, repo, cwd, workspace, and database path. |
 | `agent_relay_set_alias` | Set a short alias for the current session. |
-| `agent_relay_list_sessions` | List active or recent local sessions. |
-| `agent_relay_send_message` | Send a message for another session by alias or session ID. Defaults to queued delivery and can request immediate delivery. |
+| `agent_relay_list_sessions` | List active or recent local sessions, including repo and cwd. |
+| `agent_relay_send_message` | Send a message by session ID, alias, directory, or repo. Defaults to queued delivery and can request immediate delivery. |
 | `agent_relay_read_messages` | Read this session's AgentRelay message history without injecting messages. |
 
 Example flow:
 
 1. In each participating Copilot CLI session, ask it to call `agent_relay_set_alias` with a memorable alias like `api` or `frontend`.
 2. Ask one session to call `agent_relay_list_sessions`.
-3. Ask one session to call `agent_relay_send_message` with a target alias, message, and optional `deliveryMode`.
+3. Ask one session to call `agent_relay_send_message` with a target, message, and optional routing options.
 4. The target session polls the mailbox, claims the pending message, and receives it as a prompt.
+
+`agent_relay_send_message` supports these routing options:
+
+| Option | Values | Purpose |
+| --- | --- | --- |
+| `target` | string | Session ID, AgentRelay alias, directory name/path, or repository name/path. |
+| `targetType` | `auto`, `session`, `alias`, `directory`, `repo` | How to interpret `target`. `auto` tries session ID, alias, directory, then repo. |
+| `sendToAll` | boolean | Send to every matching session instead of failing on multiple matches. Useful for "all agents working in this repo." |
+| `includeSelf` | boolean | Include the sending session when `sendToAll` is used. Defaults to false. |
+
+Examples:
+
+- "Tell the agent working on the `DevCronAgents` directory to rerun the scheduler tests" -> use `target: "DevCronAgents"`, `targetType: "directory"`.
+- "Tell all agents working in `xplat-Android-MDM` repo to sync on auth changes" -> use `target: "xplat-Android-MDM"`, `targetType: "repo"`, `sendToAll: true`.
 
 `agent_relay_send_message` supports these delivery modes:
 

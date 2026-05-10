@@ -1,4 +1,5 @@
 import { clampInteger, getDefaultDatabasePath, openAgentRelayDatabase, runExclusive } from "./db.mjs";
+import { basenameKey, isPathLike, nameKey, pathKey } from "./work-context.mjs";
 
 export const DEFAULT_STALE_AFTER_MS = 5 * 60 * 1000;
 export const DEFAULT_MESSAGE_LIMIT = 20;
@@ -7,6 +8,7 @@ export const MAX_MESSAGE_LENGTH = 20000;
 const MESSAGE_STATUSES = new Set(["pending", "claimed", "delivered", "failed"]);
 const MESSAGE_DIRECTIONS = new Set(["inbox", "sent", "all"]);
 const DELIVERY_MODES = new Set(["queued", "immediate"]);
+const TARGET_TYPES = new Set(["auto", "session", "alias", "directory", "repo"]);
 
 export class AgentRelayError extends Error {
     constructor(message) {
@@ -44,6 +46,8 @@ export class LocalSqliteTransport {
         const sessionId = normalizeSessionId(session.sessionId);
         const alias = session.alias === undefined ? null : normalizeAlias(session.alias);
         const cwd = nullableString(session.cwd);
+        const repoRoot = nullableString(session.repoRoot);
+        const repoName = nullableString(session.repoName);
         const workspacePath = nullableString(session.workspacePath);
         const pid = Number.isInteger(session.pid) ? session.pid : process.pid;
         const transport = nullableString(session.transport) ?? "local-sqlite";
@@ -51,13 +55,15 @@ export class LocalSqliteTransport {
 
         this.db.prepare(`
             INSERT INTO sessions (
-                session_id, alias, cwd, workspace_path, pid, transport, account_hint,
+                session_id, alias, cwd, repo_root, repo_name, workspace_path, pid, transport, account_hint,
                 status, created_at, updated_at, last_seen_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
             ON CONFLICT(session_id) DO UPDATE SET
                 alias = COALESCE(excluded.alias, sessions.alias),
                 cwd = excluded.cwd,
+                repo_root = excluded.repo_root,
+                repo_name = excluded.repo_name,
                 workspace_path = excluded.workspace_path,
                 pid = excluded.pid,
                 transport = excluded.transport,
@@ -65,7 +71,7 @@ export class LocalSqliteTransport {
                 status = 'active',
                 updated_at = excluded.updated_at,
                 last_seen_at = excluded.last_seen_at
-        `).run(sessionId, alias, cwd, workspacePath, pid, transport, accountHint, now, now, now);
+        `).run(sessionId, alias, cwd, repoRoot, repoName, workspacePath, pid, transport, accountHint, now, now, now);
 
         return this.getSession(sessionId);
     }
@@ -73,6 +79,8 @@ export class LocalSqliteTransport {
     touchSession(sessionId, updates = {}) {
         const now = normalizeTimestamp(updates.now);
         const cwd = updates.cwd === undefined ? undefined : nullableString(updates.cwd);
+        const repoRoot = updates.repoRoot === undefined ? undefined : nullableString(updates.repoRoot);
+        const repoName = updates.repoName === undefined ? undefined : nullableString(updates.repoName);
         const workspacePath =
             updates.workspacePath === undefined ? undefined : nullableString(updates.workspacePath);
         const session = this.getSession(sessionId);
@@ -80,6 +88,8 @@ export class LocalSqliteTransport {
             return this.registerSession({
                 sessionId,
                 cwd,
+                repoRoot,
+                repoName,
                 workspacePath,
                 pid: updates.pid,
                 now,
@@ -89,13 +99,15 @@ export class LocalSqliteTransport {
         this.db.prepare(`
             UPDATE sessions
             SET cwd = COALESCE(?, cwd),
+                repo_root = COALESCE(?, repo_root),
+                repo_name = COALESCE(?, repo_name),
                 workspace_path = COALESCE(?, workspace_path),
                 pid = COALESCE(?, pid),
                 status = 'active',
                 updated_at = ?,
                 last_seen_at = ?
             WHERE session_id = ?
-        `).run(cwd, workspacePath, Number.isInteger(updates.pid) ? updates.pid : null, now, now, sessionId);
+        `).run(cwd, repoRoot, repoName, workspacePath, Number.isInteger(updates.pid) ? updates.pid : null, now, now, sessionId);
 
         return this.getSession(sessionId);
     }
@@ -116,6 +128,8 @@ export class LocalSqliteTransport {
                 sessionId,
                 alias: normalizedAlias,
                 cwd: details.cwd,
+                repoRoot: details.repoRoot,
+                repoName: details.repoName,
                 workspacePath: details.workspacePath,
                 pid: details.pid,
                 now: details.now,
@@ -125,9 +139,27 @@ export class LocalSqliteTransport {
         const now = normalizeTimestamp(details.now);
         this.db.prepare(`
             UPDATE sessions
-            SET alias = ?, status = 'active', updated_at = ?, last_seen_at = ?
+            SET alias = ?,
+                cwd = COALESCE(?, cwd),
+                repo_root = COALESCE(?, repo_root),
+                repo_name = COALESCE(?, repo_name),
+                workspace_path = COALESCE(?, workspace_path),
+                pid = COALESCE(?, pid),
+                status = 'active',
+                updated_at = ?,
+                last_seen_at = ?
             WHERE session_id = ?
-        `).run(normalizedAlias, now, now, normalizeSessionId(sessionId));
+        `).run(
+            normalizedAlias,
+            nullableString(details.cwd),
+            nullableString(details.repoRoot),
+            nullableString(details.repoName),
+            nullableString(details.workspacePath),
+            Number.isInteger(details.pid) ? details.pid : null,
+            now,
+            now,
+            normalizeSessionId(sessionId)
+        );
 
         return this.getSession(sessionId);
     }
@@ -159,75 +191,167 @@ export class LocalSqliteTransport {
 
         const rows = options.includeStale
             ? this.db
-                  .prepare("SELECT * FROM sessions ORDER BY last_seen_at DESC LIMIT ?")
+                  .prepare("SELECT * FROM sessions ORDER BY last_seen_at DESC, session_id ASC LIMIT ?")
                   .all(limit)
             : this.db
-                  .prepare("SELECT * FROM sessions WHERE status = 'active' ORDER BY last_seen_at DESC LIMIT ?")
+                  .prepare("SELECT * FROM sessions WHERE status = 'active' ORDER BY last_seen_at DESC, session_id ASC LIMIT ?")
                   .all(limit);
 
         return rows.map(mapSession);
     }
 
     resolveTarget(target, options = {}) {
+        const matches = this.resolveTargets(target, { ...options, allowMultiple: false });
+        return matches[0];
+    }
+
+    resolveTargets(target, options = {}) {
         const value = String(target ?? "").trim();
         if (!value) throw new ValidationError("Target alias or session ID is required.");
 
         const now = normalizeTimestamp(options.now);
         const staleAfterMs = normalizeDuration(options.staleAfterMs, DEFAULT_STALE_AFTER_MS);
+        const targetType = normalizeTargetType(options.targetType);
+        const allowMultiple = Boolean(options.allowMultiple);
         this.expireStaleSessions({ now, staleAfterMs });
 
-        const direct = this.getSession(value);
-        if (direct) {
-            if (direct.status !== "active") {
-                throw new UnknownTargetError(`Session '${value}' exists but is not active.`);
+        let matches = [];
+        let matchedBy = targetType;
+
+        if (targetType === "session" || targetType === "auto") {
+            const direct = this.getSession(value);
+            if (direct) {
+                if (direct.status !== "active") {
+                    throw new UnknownTargetError(`Session '${value}' exists but is not active.`);
+                }
+                matches = [direct];
+                matchedBy = "session";
             }
-            return direct;
         }
 
-        const alias = normalizeAlias(value);
-        const rows = this.db
+        if (matches.length === 0 && (targetType === "alias" || targetType === "auto")) {
+            matches = this.findAliasTargets(value);
+            matchedBy = "alias";
+        }
+
+        if (matches.length === 0 && (targetType === "directory" || targetType === "auto")) {
+            matches = this.findDirectoryTargets(value, options);
+            matchedBy = "directory";
+        }
+
+        if (matches.length === 0 && (targetType === "repo" || targetType === "auto")) {
+            matches = this.findRepoTargets(value, options);
+            matchedBy = "repo";
+        }
+
+        matches = uniqueSessions(matches);
+        if (options.includeSelf !== true && options.senderSessionId && allowMultiple && matchedBy !== "session") {
+            matches = matches.filter((session) => session.sessionId !== options.senderSessionId);
+        }
+
+        if (matches.length === 0) {
+            throw new UnknownTargetError(`No active AgentRelay session found for '${value}'.`);
+        }
+
+        if (matches.length > 1 && !allowMultiple) {
+            const sessionIds = matches.map((session) => session.sessionId).join(", ");
+            throw new AmbiguousTargetError(
+                `Target '${value}' matched multiple active ${matchedBy} sessions: ${sessionIds}. Set sendToAll=true or use a session ID.`
+            );
+        }
+
+        return matches;
+    }
+
+    findAliasTargets(value) {
+        let alias;
+        try {
+            alias = normalizeAlias(value);
+        } catch {
+            return [];
+        }
+        return this.db
             .prepare(`
                 SELECT *
                 FROM sessions
                 WHERE alias = ? AND status = 'active'
                 ORDER BY last_seen_at DESC
             `)
-            .all(alias);
+            .all(alias)
+            .map(mapSession);
+    }
 
-        if (rows.length === 0) {
-            throw new UnknownTargetError(`No active AgentRelay session found for '${value}'.`);
-        }
-        if (rows.length > 1) {
-            const sessionIds = rows.map((row) => row.session_id).join(", ");
-            throw new AmbiguousTargetError(
-                `Alias '${alias}' matches multiple active sessions: ${sessionIds}. Use a session ID.`
+    findDirectoryTargets(value, options = {}) {
+        const sessions = this.listSessions({ includeStale: false, limit: 200, now: options.now, staleAfterMs: options.staleAfterMs });
+        const baseCwd = options.baseCwd ?? process.cwd();
+        if (isPathLike(value)) {
+            const targetPath = pathKey(value, baseCwd);
+            return sessions.filter((session) =>
+                [session.cwd, session.repoRoot].some((candidate) => candidate && pathKey(candidate, baseCwd) === targetPath)
             );
         }
 
-        return mapSession(rows[0]);
+        const targetName = nameKey(value);
+        return sessions.filter((session) =>
+            [basenameKey(session.cwd), basenameKey(session.repoRoot), nameKey(session.repoName)].some(
+                (candidate) => candidate === targetName
+            )
+        );
+    }
+
+    findRepoTargets(value, options = {}) {
+        const sessions = this.listSessions({ includeStale: false, limit: 200, now: options.now, staleAfterMs: options.staleAfterMs });
+        const baseCwd = options.baseCwd ?? process.cwd();
+        if (isPathLike(value)) {
+            const targetPath = pathKey(value, baseCwd);
+            return sessions.filter((session) =>
+                [session.repoRoot, session.cwd].some((candidate) => candidate && pathKey(candidate, baseCwd) === targetPath)
+            );
+        }
+
+        const targetName = nameKey(value);
+        return sessions.filter((session) =>
+            [nameKey(session.repoName), basenameKey(session.repoRoot), basenameKey(session.cwd)].some(
+                (candidate) => candidate === targetName
+            )
+        );
     }
 
     enqueueMessage(input) {
+        const messages = this.enqueueMessages({ ...input, allowMultiple: false });
+        return messages[0];
+    }
+
+    enqueueMessages(input) {
         const now = normalizeTimestamp(input.now);
         const senderSessionId = normalizeSessionId(input.senderSessionId);
         const body = normalizeMessageBody(input.body);
         const deliveryMode = normalizeDeliveryMode(input.deliveryMode);
-        const target = this.resolveTarget(input.target, {
+        const targets = this.resolveTargets(input.target, {
             now,
             staleAfterMs: input.staleAfterMs,
+            targetType: input.targetType,
+            allowMultiple: input.allowMultiple,
+            includeSelf: input.includeSelf,
+            senderSessionId,
+            baseCwd: input.baseCwd,
         });
         const sender = this.getSession(senderSessionId);
         const senderAlias = sender?.alias ?? null;
-
-        const result = this.db.prepare(`
+        const insert = this.db.prepare(`
             INSERT INTO messages (
                 sender_session_id, sender_alias, target_session_id, target_alias, body, delivery_mode,
                 status, created_at, updated_at
             )
             VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)
-        `).run(senderSessionId, senderAlias, target.sessionId, target.alias, body, deliveryMode, now, now);
+        `);
 
-        return this.getMessage(Number(result.lastInsertRowid));
+        return runExclusive(this.db, () =>
+            targets.map((target) => {
+                const result = insert.run(senderSessionId, senderAlias, target.sessionId, target.alias, body, deliveryMode, now, now);
+                return this.getMessage(Number(result.lastInsertRowid));
+            })
+        );
     }
 
     getMessage(id) {
@@ -409,6 +533,14 @@ export function normalizeDeliveryMode(mode) {
     return normalized;
 }
 
+export function normalizeTargetType(type) {
+    const normalized = String(type ?? "auto").trim().toLowerCase();
+    if (!TARGET_TYPES.has(normalized)) {
+        throw new ValidationError("Target type must be 'auto', 'session', 'alias', 'directory', or 'repo'.");
+    }
+    return normalized;
+}
+
 function normalizeTimestamp(value) {
     if (value === undefined || value === null) return Date.now();
     const timestamp = Number(value);
@@ -449,6 +581,8 @@ function mapSession(row) {
         sessionId: row.session_id,
         alias: row.alias,
         cwd: row.cwd,
+        repoRoot: row.repo_root,
+        repoName: row.repo_name,
         workspacePath: row.workspace_path,
         pid: row.pid,
         transport: row.transport,
@@ -479,4 +613,15 @@ function mapMessage(row) {
         deliveredAt: row.delivered_at,
         failedAt: row.failed_at,
     };
+}
+
+function uniqueSessions(sessions) {
+    const seen = new Set();
+    const unique = [];
+    for (const session of sessions) {
+        if (seen.has(session.sessionId)) continue;
+        seen.add(session.sessionId);
+        unique.push(session);
+    }
+    return unique;
 }

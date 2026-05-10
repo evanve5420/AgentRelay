@@ -6,6 +6,7 @@ import {
     UnknownTargetError,
     ValidationError,
 } from "./transport-local-sqlite.mjs";
+import { createWorkContext } from "./work-context.mjs";
 
 export const DEFAULT_POLL_INTERVAL_MS = 2500;
 export const DEFAULT_RECENT_IDLE_POLL_INTERVAL_MS = 10000;
@@ -17,7 +18,8 @@ export class AgentRelayRuntime {
     constructor(options) {
         this.session = options.session;
         this.transport = options.transport;
-        this.cwd = options.cwd ?? process.cwd();
+        this.workContext = createWorkContext(options.cwd ?? process.cwd());
+        this.cwd = this.workContext.cwd;
         this.activePollIntervalMs = parsePositiveInteger(
             options.activePollIntervalMs ?? options.pollIntervalMs,
             DEFAULT_POLL_INTERVAL_MS,
@@ -62,13 +64,18 @@ export class AgentRelayRuntime {
     }
 
     updateCwd(cwd) {
-        if (cwd) this.cwd = cwd;
+        if (!cwd) return;
+        this.workContext = createWorkContext(cwd);
+        this.cwd = this.workContext.cwd;
     }
 
     register(extra = {}) {
+        if (extra.cwd) this.updateCwd(extra.cwd);
         return this.transport.registerSession({
             sessionId: this.sessionId,
-            cwd: extra.cwd ?? this.cwd,
+            cwd: this.workContext.cwd,
+            repoRoot: this.workContext.repoRoot,
+            repoName: this.workContext.repoName,
             workspacePath: this.session.workspacePath,
             pid: process.pid,
             now: extra.now,
@@ -78,7 +85,9 @@ export class AgentRelayRuntime {
     touch(cwd = this.cwd) {
         this.updateCwd(cwd);
         return this.transport.touchSession(this.sessionId, {
-            cwd: this.cwd,
+            cwd: this.workContext.cwd,
+            repoRoot: this.workContext.repoRoot,
+            repoName: this.workContext.repoName,
             workspacePath: this.session.workspacePath,
             pid: process.pid,
         });
@@ -86,19 +95,26 @@ export class AgentRelayRuntime {
 
     setAlias(alias) {
         return this.transport.setAlias(this.sessionId, alias, {
-            cwd: this.cwd,
+            cwd: this.workContext.cwd,
+            repoRoot: this.workContext.repoRoot,
+            repoName: this.workContext.repoName,
             workspacePath: this.session.workspacePath,
             pid: process.pid,
         });
     }
 
-    sendMessage(target, message, deliveryMode = "queued") {
+    sendMessage(target, message, options = {}) {
+        const deliveryMode = typeof options === "string" ? options : options.deliveryMode ?? "queued";
         this.touch();
-        return this.transport.enqueueMessage({
+        return this.transport.enqueueMessages({
             senderSessionId: this.sessionId,
             target,
             body: message,
             deliveryMode,
+            targetType: typeof options === "string" ? "auto" : options.targetType,
+            allowMultiple: typeof options === "string" ? false : Boolean(options.sendToAll),
+            includeSelf: typeof options === "string" ? false : Boolean(options.includeSelf),
+            baseCwd: this.cwd,
             staleAfterMs: this.staleAfterMs,
         });
     }
@@ -307,7 +323,8 @@ export function createAgentRelayTools(getRuntime) {
                 properties: {
                     target: {
                         type: "string",
-                        description: "Target session alias or exact session ID.",
+                        description:
+                            "Target session ID, AgentRelay alias, directory name/path, or repository name/path.",
                     },
                     message: {
                         type: "string",
@@ -320,6 +337,25 @@ export function createAgentRelayTools(getRuntime) {
                             "How the target session should receive the message. 'queued' waits behind active work; 'immediate' attempts steering-style injection.",
                         default: "queued",
                     },
+                    targetType: {
+                        type: "string",
+                        enum: ["auto", "session", "alias", "directory", "repo"],
+                        description:
+                            "How to interpret target. 'auto' tries session ID, alias, directory, then repo.",
+                        default: "auto",
+                    },
+                    sendToAll: {
+                        type: "boolean",
+                        description:
+                            "When true, send to all matching sessions instead of failing on multiple matches.",
+                        default: false,
+                    },
+                    includeSelf: {
+                        type: "boolean",
+                        description:
+                            "When true with sendToAll, include the sending session if it also matches the target.",
+                        default: false,
+                    },
                 },
                 required: ["target", "message"],
                 additionalProperties: false,
@@ -328,8 +364,13 @@ export function createAgentRelayTools(getRuntime) {
             handler: (args) => {
                 const runtime = requireRuntime(getRuntime);
                 try {
-                    const message = runtime.sendMessage(args.target, args.message, args.deliveryMode ?? "queued");
-                    return `Queued AgentRelay message ${message.id} for ${formatTarget(message)} with ${message.deliveryMode} delivery.`;
+                    const messages = runtime.sendMessage(args.target, args.message, {
+                        deliveryMode: args.deliveryMode ?? "queued",
+                        targetType: args.targetType ?? "auto",
+                        sendToAll: Boolean(args.sendToAll),
+                        includeSelf: Boolean(args.includeSelf),
+                    });
+                    return formatSendResult(messages);
                 } catch (error) {
                     if (
                         error instanceof UnknownTargetError ||
@@ -466,6 +507,8 @@ function formatWhoami(info) {
         "AgentRelay session",
         `- Session ID: ${info.sessionId}`,
         `- Alias: ${info.alias ?? "(not set)"}`,
+        `- Repo: ${info.repoName ?? "(none)"}`,
+        `- Repo root: ${info.repoRoot ?? "(none)"}`,
         `- Status: ${info.status}`,
         `- CWD: ${info.cwd ?? "(unknown)"}`,
         `- Workspace: ${info.workspacePath ?? "(none)"}`,
@@ -482,10 +525,10 @@ function formatWhoami(info) {
 
 function formatSessions(sessions) {
     if (sessions.length === 0) return "No AgentRelay sessions found.";
-    const lines = ["| Alias | Status | Session ID | Last seen | CWD |", "| --- | --- | --- | --- | --- |"];
+    const lines = ["| Alias | Repo | Status | Session ID | Last seen | CWD |", "| --- | --- | --- | --- | --- | --- |"];
     for (const session of sessions) {
         lines.push(
-            `| ${escapeCell(session.alias ?? "")} | ${escapeCell(session.status)} | ${escapeCell(
+            `| ${escapeCell(session.alias ?? "")} | ${escapeCell(session.repoName ?? "")} | ${escapeCell(session.status)} | ${escapeCell(
                 session.sessionId
             )} | ${escapeCell(new Date(session.lastSeenAt).toISOString())} | ${escapeCell(session.cwd ?? "")} |`
         );
@@ -513,6 +556,17 @@ function formatMessages(messages) {
 
 function formatTarget(message) {
     return message.targetAlias ? `${message.targetAlias} (${message.targetSessionId})` : message.targetSessionId;
+}
+
+function formatSendResult(messages) {
+    if (messages.length === 1) {
+        const message = messages[0];
+        return `Queued AgentRelay message ${message.id} for ${formatTarget(message)} with ${message.deliveryMode} delivery.`;
+    }
+    return [
+        `Queued ${messages.length} AgentRelay messages:`,
+        ...messages.map((message) => `- ${message.id}: ${formatTarget(message)} (${message.deliveryMode})`),
+    ].join("\n");
 }
 
 function parsePositiveInteger(value, fallback, min, max) {

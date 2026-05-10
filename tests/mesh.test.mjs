@@ -193,6 +193,54 @@ test("pollOnce marks failed messages when session.send fails", async () => {
     });
 });
 
+test("send tool can target all sessions in a repository", async () => {
+    await withRuntime(async (transport) => {
+        const now = Date.now();
+        transport.registerSession({
+            sessionId: "sender",
+            alias: "sender",
+            cwd: "C:\\src\\sender",
+            repoRoot: "C:\\src\\sender",
+            repoName: "sender",
+            now,
+        });
+        transport.registerSession({
+            sessionId: "repo-one",
+            cwd: "C:\\src\\xplat-Android-MDM\\one",
+            repoRoot: "C:\\src\\xplat-Android-MDM",
+            repoName: "xplat-Android-MDM",
+            now,
+        });
+        transport.registerSession({
+            sessionId: "repo-two",
+            cwd: "C:\\src\\xplat-Android-MDM\\two",
+            repoRoot: "C:\\src\\xplat-Android-MDM",
+            repoName: "xplat-Android-MDM",
+            now,
+        });
+
+        const fakeSession = new FakeSession("sender");
+        const runtime = new AgentRelayRuntime({
+            session: fakeSession,
+            transport,
+            cwd: "C:\\src\\sender",
+        });
+        const sendTool = createAgentRelayTools(() => runtime).find((tool) => tool.name === "agent_relay_send_message");
+
+        const result = sendTool.handler({
+            target: "xplat-Android-MDM",
+            targetType: "repo",
+            sendToAll: true,
+            message: "Please coordinate on the Android MDM work.",
+        });
+
+        assert.match(result, /Queued 2 AgentRelay messages/);
+        const messages = transport.listMessages({ sessionId: "repo-one", direction: "inbox" });
+        assert.equal(messages.length, 1);
+        assert.equal(messages[0].body, "Please coordinate on the Android MDM work.");
+    });
+});
+
 test("startup maintenance prunes old delivered and failed messages without exposing a cleanup tool", async () => {
     await withRuntime(async (transport) => {
         transport.registerSession({ sessionId: "sender", alias: "sender", now: 1000 });
