@@ -52,6 +52,7 @@ export class AgentRelayRuntime {
         );
         this.claimLimit = parsePositiveInteger(options.claimLimit, DEFAULT_MESSAGE_LIMIT, 1, 50);
         this.startupPruneAfterMs = daysToMs(options.startupPruneAfterDays ?? DEFAULT_STARTUP_PRUNE_AFTER_DAYS);
+        this.configPath = options.configPath ?? null;
         this.timer = null;
         this.isPolling = false;
         this.isTurnRunning = false;
@@ -133,6 +134,7 @@ export class AgentRelayRuntime {
         return {
             ...this.transport.getSession(this.sessionId),
             databasePath: this.transport.dbPath ?? getDefaultDatabasePath(),
+            configPath: this.configPath,
             pollIntervalMs: this.getCurrentPollInterval(),
             activePollIntervalMs: this.activePollIntervalMs,
             recentIdlePollIntervalMs: this.recentIdlePollIntervalMs,
@@ -429,42 +431,57 @@ export function createAgentRelayTools(getRuntime) {
     ];
 }
 
-export function readRuntimeConfig(env = process.env) {
+export function readRuntimeConfig(env = process.env, settings = {}) {
     return {
-        pollIntervalMs: parsePositiveInteger(env.AGENT_RELAY_POLL_MS, DEFAULT_POLL_INTERVAL_MS, 250, 60000),
+        pollIntervalMs: parsePositiveInteger(
+            firstConfigValue(env.AGENT_RELAY_POLL_MS, settings.pollIntervalMs),
+            DEFAULT_POLL_INTERVAL_MS,
+            250,
+            60000
+        ),
         activePollIntervalMs: parsePositiveInteger(
-            env.AGENT_RELAY_ACTIVE_POLL_MS ?? env.AGENT_RELAY_POLL_MS,
+            firstConfigValue(
+                env.AGENT_RELAY_ACTIVE_POLL_MS,
+                env.AGENT_RELAY_POLL_MS,
+                settings.activePollIntervalMs,
+                settings.pollIntervalMs
+            ),
             DEFAULT_POLL_INTERVAL_MS,
             250,
             60000
         ),
         recentIdlePollIntervalMs: parsePositiveInteger(
-            env.AGENT_RELAY_RECENT_IDLE_POLL_MS,
+            firstConfigValue(env.AGENT_RELAY_RECENT_IDLE_POLL_MS, settings.recentIdlePollIntervalMs),
             DEFAULT_RECENT_IDLE_POLL_INTERVAL_MS,
             1000,
             60000
         ),
         idlePollIntervalMs: parsePositiveInteger(
-            env.AGENT_RELAY_IDLE_POLL_MS,
+            firstConfigValue(env.AGENT_RELAY_IDLE_POLL_MS, settings.idlePollIntervalMs),
             DEFAULT_IDLE_POLL_INTERVAL_MS,
             1000,
             5 * 60 * 1000
         ),
         recentIdleWindowMs: parsePositiveInteger(
-            env.AGENT_RELAY_RECENT_IDLE_WINDOW_MS,
+            firstConfigValue(env.AGENT_RELAY_RECENT_IDLE_WINDOW_MS, settings.recentIdleWindowMs),
             DEFAULT_RECENT_IDLE_WINDOW_MS,
             1000,
             24 * 60 * 60 * 1000
         ),
         staleAfterMs: parsePositiveInteger(
-            env.AGENT_RELAY_STALE_MS,
+            firstConfigValue(env.AGENT_RELAY_STALE_MS, settings.staleAfterMs),
             DEFAULT_STALE_AFTER_MS,
             5000,
             24 * 60 * 60 * 1000
         ),
-        claimLimit: parsePositiveInteger(env.AGENT_RELAY_CLAIM_LIMIT, DEFAULT_MESSAGE_LIMIT, 1, 50),
+        claimLimit: parsePositiveInteger(
+            firstConfigValue(env.AGENT_RELAY_CLAIM_LIMIT, settings.claimLimit),
+            DEFAULT_MESSAGE_LIMIT,
+            1,
+            50
+        ),
         startupPruneAfterDays: parsePositiveInteger(
-            env.AGENT_RELAY_PRUNE_DAYS,
+            firstConfigValue(env.AGENT_RELAY_PRUNE_DAYS, settings.startupPruneAfterDays),
             DEFAULT_STARTUP_PRUNE_AFTER_DAYS,
             1,
             365
@@ -513,6 +530,7 @@ function formatWhoami(info) {
         `- CWD: ${info.cwd ?? "(unknown)"}`,
         `- Workspace: ${info.workspacePath ?? "(none)"}`,
         `- Database: ${info.databasePath}`,
+        `- Config: ${info.configPath ?? "(none)"}`,
         `- Current poll interval: ${info.pollIntervalMs} ms`,
         `- Active poll interval: ${info.activePollIntervalMs} ms`,
         `- Recent-idle poll interval: ${info.recentIdlePollIntervalMs} ms`,
@@ -573,6 +591,15 @@ function parsePositiveInteger(value, fallback, min, max) {
     const parsed = Number.parseInt(String(value), 10);
     if (!Number.isFinite(parsed)) return fallback;
     return Math.min(max, Math.max(min, parsed));
+}
+
+function firstConfigValue(...values) {
+    for (const value of values) {
+        if (value === undefined || value === null) continue;
+        if (typeof value === "string" && value.trim() === "") continue;
+        return value;
+    }
+    return undefined;
 }
 
 function normalizeNow(value) {

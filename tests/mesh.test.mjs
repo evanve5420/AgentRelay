@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
+import { getDefaultConfigPath, readAgentRelaySettings } from "../src/config.mjs";
 import { openAgentRelayDatabase } from "../src/db.mjs";
-import { AgentRelayRuntime, createAgentRelayTools, formatRelayPrompt } from "../src/mesh.mjs";
+import { AgentRelayRuntime, createAgentRelayTools, formatRelayPrompt, readRuntimeConfig } from "../src/mesh.mjs";
 import { LocalSqliteTransport } from "../src/transport-local-sqlite.mjs";
 
 class FakeSession {
@@ -136,8 +137,7 @@ test("uses adaptive poll intervals for running, recent-idle, and long-idle state
     });
 });
 
-test("readRuntimeConfig supports adaptive polling environment overrides", async () => {
-    const { readRuntimeConfig } = await import("../src/mesh.mjs");
+test("readRuntimeConfig supports adaptive polling environment overrides", () => {
     const config = readRuntimeConfig({
         AGENT_RELAY_ACTIVE_POLL_MS: "3000",
         AGENT_RELAY_RECENT_IDLE_POLL_MS: "11000",
@@ -151,13 +151,47 @@ test("readRuntimeConfig supports adaptive polling environment overrides", async 
     assert.equal(config.recentIdleWindowMs, 600000);
 });
 
-test("legacy AGENT_RELAY_POLL_MS configures active polling", async () => {
-    const { readRuntimeConfig } = await import("../src/mesh.mjs");
+test("legacy AGENT_RELAY_POLL_MS configures active polling", () => {
     const config = readRuntimeConfig({
         AGENT_RELAY_POLL_MS: "3500",
     });
 
     assert.equal(config.activePollIntervalMs, 3500);
+});
+
+test("reads AgentRelay settings from a configured JSON file", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "agent-relay-config-"));
+    try {
+        const configPath = join(dir, "settings.json");
+        await writeFile(configPath, JSON.stringify({ activePollIntervalMs: 2750 }), "utf8");
+
+        const result = readAgentRelaySettings({ AGENT_RELAY_CONFIG: configPath });
+
+        assert.equal(result.configPath, configPath);
+        assert.equal(result.settings.activePollIntervalMs, 2750);
+        assert.equal(getDefaultConfigPath({ COPILOT_CONFIG_DIR: dir }), join(dir, "agent-relay.json"));
+    } finally {
+        await rm(dir, { recursive: true, force: true });
+    }
+});
+
+test("readRuntimeConfig uses settings file values and lets environment variables win", () => {
+    const config = readRuntimeConfig(
+        {
+            AGENT_RELAY_ACTIVE_POLL_MS: "4500",
+        },
+        {
+            activePollIntervalMs: 3000,
+            recentIdlePollIntervalMs: 12000,
+            idlePollIntervalMs: 45000,
+            recentIdleWindowMs: 600000,
+        }
+    );
+
+    assert.equal(config.activePollIntervalMs, 4500);
+    assert.equal(config.recentIdlePollIntervalMs, 12000);
+    assert.equal(config.idlePollIntervalMs, 45000);
+    assert.equal(config.recentIdleWindowMs, 600000);
 });
 
 test("pollOnce marks failed messages when session.send fails", async () => {

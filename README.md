@@ -10,6 +10,12 @@ The v0 design is intentionally local-only: every participating session loads a u
 - Node.js 24 or newer for the built-in `node:sqlite` module.
 - Windows PowerShell for the install scripts.
 
+## Extension runtime note
+
+Copilot CLI currently requires extension entry points to be JavaScript ES modules named `extension.mjs`. The `.mjs` extension means "ECMAScript module"; it lets Node load the file with ESM `import` syntax instead of CommonJS `require`.
+
+The extension entry point must be `.mjs`, but it can hand work to other languages. For example, a tool handler can call PowerShell, a native executable, Python, or an HTTP service with Node's child-process or fetch APIs.
+
 ## Install locally
 
 From this repository:
@@ -87,9 +93,29 @@ Examples:
 
 ## Runtime settings
 
+AgentRelay reads optional settings from:
+
+```text
+%USERPROFILE%\.copilot\agent-relay.json
+```
+
+If `COPILOT_CONFIG_DIR` is set, AgentRelay looks there instead. Set `AGENT_RELAY_CONFIG` to point at a different JSON file. Environment variables override file settings.
+
+Example:
+
+```json
+{
+  "activePollIntervalMs": 2500,
+  "recentIdlePollIntervalMs": 10000,
+  "recentIdleWindowMs": 900000,
+  "idlePollIntervalMs": 30000
+}
+```
+
 | Environment variable | Default | Purpose |
 | --- | --- | --- |
 | `AGENT_RELAY_DB` | `%LOCALAPPDATA%\AgentRelay\agent-relay.sqlite` | SQLite mailbox path. |
+| `AGENT_RELAY_CONFIG` | `%USERPROFILE%\.copilot\agent-relay.json` | Optional JSON settings file path. |
 | `AGENT_RELAY_ACTIVE_POLL_MS` | `2500` | Poll interval while a target session turn appears to be running. Legacy `AGENT_RELAY_POLL_MS` also sets this value. |
 | `AGENT_RELAY_RECENT_IDLE_POLL_MS` | `10000` | Poll interval for the first recent-idle window after a turn finishes. |
 | `AGENT_RELAY_RECENT_IDLE_WINDOW_MS` | `900000` | Recent-idle window after `session.idle`; defaults to 15 minutes. |
@@ -100,13 +126,14 @@ Examples:
 
 Polling is adaptive: AgentRelay polls every 2.5 seconds while a turn is running, every 10 seconds for 15 minutes after the session becomes idle, then every 30 seconds after that.
 
+```text
+          active turn                       recent idle window                 long idle
+    |----------------------|------------------------------------------------|------------->
+    turn starts/runs       session.idle                                     idle + 15 min
+        poll 2.5s              poll 10s                                         poll 30s
+```
+
 AgentRelay does not expose a cleanup tool. On extension startup or reload, it marks stale sessions and prunes delivered or failed messages older than `AGENT_RELAY_PRUNE_DAYS`.
-
-## Sharing with coworkers
-
-AgentRelay has no npm dependencies and does not require a broker service. A coworker can clone or copy the repository, run the install script, and reload Copilot CLI extensions.
-
-The local SQLite transport is isolated behind a small storage boundary so a future transport can route to other machines under the same GitHub account without rewriting the extension tools or delivery loop.
 
 ## Current limitations
 

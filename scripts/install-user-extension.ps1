@@ -8,6 +8,7 @@ $targetDir = Join-Path $extensionsDir 'AgentRelay'
 
 $requiredFiles = @(
     'extension.mjs',
+    'config.mjs',
     'db.mjs',
     'mesh.mjs',
     'transport-local-sqlite.mjs',
