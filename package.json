@@ -1,0 +1,15 @@
+{
+  "name": "agent-relay",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A daemon-free Copilot CLI extension for relaying messages between local agent sessions.",
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "test": "node --disable-warning=ExperimentalWarning --test tests\\*.test.mjs",
+    "install:extension": "powershell -ExecutionPolicy Bypass -File scripts\\install-user-extension.ps1",
+    "uninstall:extension": "powershell -ExecutionPolicy Bypass -File scripts\\uninstall-user-extension.ps1"
+  }
+}
