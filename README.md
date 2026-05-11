@@ -116,6 +116,7 @@ Example flow:
 2. Ask one session to call `agent_relay_list_sessions`.
 3. Ask one session to call `agent_relay_send_message` with a target, message, and optional routing options.
 4. The target session polls the mailbox, claims the pending message, and receives it as a prompt.
+5. Delivered prompts include reply guidance telling the receiving agent which `agent_relay_send_message` target and `targetType` to use if a response is needed.
 
 `agent_relay_send_message` supports these routing options:
 

@@ -51,7 +51,24 @@ test("formats relay prompts with sender metadata and body", () => {
 
     assert.match(prompt, /AgentRelay message/);
     assert.match(prompt, /sender \(sender-session\)/);
+    assert.match(prompt, /Reply guidance:/);
+    assert.match(prompt, /agent_relay_send_message/);
+    assert.match(prompt, /target: "sender"/);
+    assert.match(prompt, /targetType: "alias"/);
     assert.match(prompt, /Please inspect the failing test\./);
+});
+
+test("formats relay prompts with session ID reply target when sender has no alias", () => {
+    const prompt = formatRelayPrompt({
+        id: 8,
+        senderSessionId: "sender-session",
+        senderAlias: null,
+        body: "Status?",
+        createdAt: 1700000000000,
+    });
+
+    assert.match(prompt, /target: "sender-session"/);
+    assert.match(prompt, /targetType: "session"/);
 });
 
 test("pollOnce injects claimed messages and marks them delivered", async () => {

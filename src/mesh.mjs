@@ -493,12 +493,21 @@ export function formatRelayPrompt(message) {
     const sender = message.senderAlias
         ? `${message.senderAlias} (${message.senderSessionId})`
         : message.senderSessionId;
+    const replyTarget = message.senderAlias ?? message.senderSessionId;
+    const replyTargetType = message.senderAlias ? "alias" : "session";
     return [
         "You received an AgentRelay message from another local Copilot CLI session.",
         "",
         `From: ${sender}`,
         `Message ID: ${message.id}`,
         `Sent at: ${new Date(message.createdAt).toISOString()}`,
+        "",
+        "Reply guidance:",
+        "If a reply is needed, do not just write the reply in this chat.",
+        `Use agent_relay_send_message with target: ${JSON.stringify(replyTarget)}, targetType: ${JSON.stringify(
+            replyTargetType
+        )}, and message set to your response.`,
+        "If no reply is needed, continue with the requested work normally.",
         "",
         "Message:",
         message.body,
