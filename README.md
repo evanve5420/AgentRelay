@@ -53,6 +53,22 @@ If `COPILOT_CONFIG_DIR` is set, the installer uses that directory instead of `%U
 
 There is no build step or package restore. The installer validates the required `.mjs` files, copies them into the Copilot extensions directory, and writes `installed-from.txt` for troubleshooting.
 
+Manual copy should produce this flat layout:
+
+```text
+%USERPROFILE%\.copilot\extensions\AgentRelay\
+  extension.mjs
+  config.mjs
+  db.mjs
+  mesh.mjs
+  transport-local-sqlite.mjs
+  work-context.mjs
+```
+
+Copilot CLI discovers the extension from `extension.mjs`; AgentRelay does not install npm dependencies in the extension directory.
+
+If the extension does not load after copying those files, check `node --version`. Node.js 22 is not enough for AgentRelay because `node:sqlite` is built into Node.js 24+.
+
 ## Update locally
 
 If this repository was cloned with Git:
