@@ -6,9 +6,10 @@ The v0 design is intentionally local-only: every participating session loads a u
 
 ## Requirements
 
-- Copilot CLI with extension support.
-- Node.js 24 or newer for the built-in `node:sqlite` module.
-- Windows PowerShell for the install scripts.
+- Copilot CLI with extension support and an active Copilot subscription.
+- Node.js 24 or newer. AgentRelay uses the built-in `node:sqlite` module. `npm` is bundled with normal Node.js installs and is used only for the test/update scripts.
+- Windows PowerShell 6 or newer for the install, update, and uninstall scripts.
+- Git, if using the update script to pull newer versions from the repository.
 
 ## Extension runtime note
 
@@ -34,6 +35,18 @@ The installer copies the extension files to:
 ```
 
 If `COPILOT_CONFIG_DIR` is set, the installer uses that directory instead of `%USERPROFILE%\.copilot`.
+
+There is no build step or package restore. The installer validates the required `.mjs` files, copies them into the Copilot extensions directory, and writes `installed-from.txt` for troubleshooting.
+
+## Update locally
+
+If this repository was cloned with Git:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\update-user-extension.ps1
+```
+
+The update script runs `git pull --ff-only`, runs `npm test`, then runs the install script. If you already updated the repository manually, use `-SkipPull`. If you need to reinstall without running tests, use `-SkipTests`.
 
 ## Uninstall
 
