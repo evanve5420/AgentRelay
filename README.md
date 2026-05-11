@@ -11,6 +11,21 @@ The v0 design is intentionally local-only: every participating session loads a u
 - Windows PowerShell 6 or newer for the install, update, and uninstall scripts.
 - Git, if using the update script to pull newer versions from the repository.
 
+## Quick handoff checklist
+
+1. Install Copilot CLI, sign in, and confirm extensions are supported.
+2. Install Node.js 24 or newer. A normal Node.js install includes `npm`.
+3. Clone or copy this repository.
+4. From the repository root, run:
+
+```powershell
+npm test
+npm run install:extension
+```
+
+5. Reload Copilot CLI extensions by starting a new session, using `/clear`, or asking a session with tool access to call `extensions_reload`.
+6. On first launch in a directory, approve AgentRelay's extension permission prompt. Choose the "always allow" option if you want Copilot CLI to remember that decision for that directory.
+
 ## Extension runtime note
 
 Copilot CLI currently requires extension entry points to be JavaScript ES modules named `extension.mjs`. The `.mjs` extension means "ECMAScript module"; it lets Node load the file with ESM `import` syntax instead of CommonJS `require`.
