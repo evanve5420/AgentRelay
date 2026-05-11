@@ -26,8 +26,8 @@ async function withTransport(callback) {
 
 test("registers sessions, enqueues, claims, and delivers a message once", async () => {
     await withTransport((transport) => {
-        transport.registerSession({ sessionId: "sender", alias: "source", cwd: "C:\\src\\a", now: 1000 });
-        transport.registerSession({ sessionId: "target", alias: "dest", cwd: "C:\\src\\b", now: 1000 });
+        transport.registerSession({ sessionId: "sender", alias: "source", cwd: "C:\\workspace\\a", now: 1000 });
+        transport.registerSession({ sessionId: "target", alias: "dest", cwd: "C:\\workspace\\b", now: 1000 });
 
         const queued = transport.enqueueMessage({
             senderSessionId: "sender",
@@ -99,57 +99,57 @@ test("ignores stale aliases when resolving targets", async () => {
 test("resolves sessions by directory name and repository name", async () => {
     await withTransport((transport) => {
         transport.registerSession({
-            sessionId: "devcron",
+            sessionId: "scheduler",
             alias: "worker",
-            cwd: "C:\\src\\DevCronAgents",
-            repoRoot: "C:\\src\\DevCronAgents",
-            repoName: "DevCronAgents",
+            cwd: "C:\\workspace\\scheduler-service",
+            repoRoot: "C:\\workspace\\scheduler-service",
+            repoName: "scheduler-service",
             now: 1000,
         });
         transport.registerSession({
-            sessionId: "android-one",
-            cwd: "C:\\src\\xplat-Android-MDM\\app",
-            repoRoot: "C:\\src\\xplat-Android-MDM",
-            repoName: "xplat-Android-MDM",
+            sessionId: "mobile-one",
+            cwd: "C:\\workspace\\mobile-app\\app",
+            repoRoot: "C:\\workspace\\mobile-app",
+            repoName: "mobile-app",
             now: 1000,
         });
         transport.registerSession({
-            sessionId: "android-two",
-            cwd: "C:\\src\\xplat-Android-MDM\\service",
-            repoRoot: "C:\\src\\xplat-Android-MDM",
-            repoName: "xplat-Android-MDM",
+            sessionId: "mobile-two",
+            cwd: "C:\\workspace\\mobile-app\\service",
+            repoRoot: "C:\\workspace\\mobile-app",
+            repoName: "mobile-app",
             now: 1000,
         });
 
-        const [directoryTarget] = transport.resolveTargets("DevCronAgents", {
+        const [directoryTarget] = transport.resolveTargets("scheduler-service", {
             targetType: "directory",
             now: 1100,
         });
-        assert.equal(directoryTarget.sessionId, "devcron");
+        assert.equal(directoryTarget.sessionId, "scheduler");
 
-        const repoTargets = transport.resolveTargets("xplat-Android-MDM", {
+        const repoTargets = transport.resolveTargets("mobile-app", {
             targetType: "repo",
             allowMultiple: true,
             now: 1100,
         });
-        assert.deepEqual(repoTargets.map((session) => session.sessionId).sort(), ["android-one", "android-two"]);
+        assert.deepEqual(repoTargets.map((session) => session.sessionId).sort(), ["mobile-one", "mobile-two"]);
     });
 });
 
 test("enqueues to all matching repository sessions when requested", async () => {
     await withTransport((transport) => {
-        transport.registerSession({ sessionId: "sender", alias: "sender", cwd: "C:\\src", now: 1000 });
+        transport.registerSession({ sessionId: "sender", alias: "sender", cwd: "C:\\workspace", now: 1000 });
         transport.registerSession({
             sessionId: "one",
-            cwd: "C:\\src\\repo\\one",
-            repoRoot: "C:\\src\\repo",
+            cwd: "C:\\workspace\\repo\\one",
+            repoRoot: "C:\\workspace\\repo",
             repoName: "repo",
             now: 1000,
         });
         transport.registerSession({
             sessionId: "two",
-            cwd: "C:\\src\\repo\\two",
-            repoRoot: "C:\\src\\repo",
+            cwd: "C:\\workspace\\repo\\two",
+            repoRoot: "C:\\workspace\\repo",
             repoName: "repo",
             now: 1000,
         });
@@ -216,7 +216,7 @@ test("migrates existing databases before creating repo indexes", async () => {
         assert.equal(columns.includes("repo_name"), true);
 
         db.prepare("INSERT INTO sessions (session_id, cwd, repo_name, status, created_at, updated_at, last_seen_at) VALUES (?, ?, ?, 'active', ?, ?, ?)")
-            .run("session", "C:\\src\\repo", "repo", 1000, 1000, 1000);
+            .run("session", "C:\\workspace\\repo", "repo", 1000, 1000, 1000);
     } finally {
         db.close();
         await rm(dir, { recursive: true, force: true });

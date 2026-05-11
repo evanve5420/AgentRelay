@@ -81,8 +81,8 @@ Example flow:
 
 Examples:
 
-- "Tell the agent working on the `DevCronAgents` directory to rerun the scheduler tests" -> use `target: "DevCronAgents"`, `targetType: "directory"`.
-- "Tell all agents working in `xplat-Android-MDM` repo to sync on auth changes" -> use `target: "xplat-Android-MDM"`, `targetType: "repo"`, `sendToAll: true`.
+- "Tell the agent working on the `scheduler-service` directory to rerun the scheduler tests" -> use `target: "scheduler-service"`, `targetType: "directory"`.
+- "Tell all agents working in `mobile-app` repo to sync on auth changes" -> use `target: "mobile-app"`, `targetType: "repo"`, `sendToAll: true`.
 
 `agent_relay_send_message` supports these delivery modes:
 

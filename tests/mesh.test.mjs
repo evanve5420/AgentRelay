@@ -69,7 +69,7 @@ test("pollOnce injects claimed messages and marks them delivered", async () => {
         const runtime = new AgentRelayRuntime({
             session: fakeSession,
             transport,
-            cwd: "C:\\src\\target",
+            cwd: "C:\\workspace\\target",
             pollIntervalMs: 1000,
         });
 
@@ -103,7 +103,7 @@ test("pollOnce uses immediate mode for immediate delivery messages", async () =>
         const runtime = new AgentRelayRuntime({
             session: fakeSession,
             transport,
-            cwd: "C:\\src\\target",
+            cwd: "C:\\workspace\\target",
             pollIntervalMs: 1000,
         });
 
@@ -120,7 +120,7 @@ test("uses adaptive poll intervals for running, recent-idle, and long-idle state
         const runtime = new AgentRelayRuntime({
             session: fakeSession,
             transport,
-            cwd: "C:\\src\\target",
+            cwd: "C:\\workspace\\target",
             activePollIntervalMs: 2500,
             recentIdlePollIntervalMs: 10000,
             idlePollIntervalMs: 30000,
@@ -213,7 +213,7 @@ test("pollOnce marks failed messages when session.send fails", async () => {
         const runtime = new AgentRelayRuntime({
             session: fakeSession,
             transport,
-            cwd: "C:\\src\\target",
+            cwd: "C:\\workspace\\target",
             pollIntervalMs: 1000,
         });
 
@@ -233,23 +233,23 @@ test("send tool can target all sessions in a repository", async () => {
         transport.registerSession({
             sessionId: "sender",
             alias: "sender",
-            cwd: "C:\\src\\sender",
-            repoRoot: "C:\\src\\sender",
+            cwd: "C:\\workspace\\sender",
+            repoRoot: "C:\\workspace\\sender",
             repoName: "sender",
             now,
         });
         transport.registerSession({
             sessionId: "repo-one",
-            cwd: "C:\\src\\xplat-Android-MDM\\one",
-            repoRoot: "C:\\src\\xplat-Android-MDM",
-            repoName: "xplat-Android-MDM",
+            cwd: "C:\\workspace\\mobile-app\\one",
+            repoRoot: "C:\\workspace\\mobile-app",
+            repoName: "mobile-app",
             now,
         });
         transport.registerSession({
             sessionId: "repo-two",
-            cwd: "C:\\src\\xplat-Android-MDM\\two",
-            repoRoot: "C:\\src\\xplat-Android-MDM",
-            repoName: "xplat-Android-MDM",
+            cwd: "C:\\workspace\\mobile-app\\two",
+            repoRoot: "C:\\workspace\\mobile-app",
+            repoName: "mobile-app",
             now,
         });
 
@@ -257,21 +257,21 @@ test("send tool can target all sessions in a repository", async () => {
         const runtime = new AgentRelayRuntime({
             session: fakeSession,
             transport,
-            cwd: "C:\\src\\sender",
+            cwd: "C:\\workspace\\sender",
         });
         const sendTool = createAgentRelayTools(() => runtime).find((tool) => tool.name === "agent_relay_send_message");
 
         const result = sendTool.handler({
-            target: "xplat-Android-MDM",
+            target: "mobile-app",
             targetType: "repo",
             sendToAll: true,
-            message: "Please coordinate on the Android MDM work.",
+            message: "Please coordinate on the mobile work.",
         });
 
         assert.match(result, /Queued 2 AgentRelay messages/);
         const messages = transport.listMessages({ sessionId: "repo-one", direction: "inbox" });
         assert.equal(messages.length, 1);
-        assert.equal(messages[0].body, "Please coordinate on the Android MDM work.");
+        assert.equal(messages[0].body, "Please coordinate on the mobile work.");
     });
 });
 
@@ -302,7 +302,7 @@ test("startup maintenance prunes old delivered and failed messages without expos
         const runtime = new AgentRelayRuntime({
             session: fakeSession,
             transport,
-            cwd: "C:\\src\\target",
+            cwd: "C:\\workspace\\target",
             startupPruneAfterDays: 1,
         });
 
