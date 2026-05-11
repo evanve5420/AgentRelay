@@ -6,25 +6,26 @@ The v0 design is intentionally local-only: every participating session loads a u
 
 ## Requirements
 
-- Copilot CLI with extension support and an active Copilot subscription.
+- Copilot CLI with extension support, experimental mode enabled, and an active Copilot subscription.
 - Node.js 24 or newer. AgentRelay uses the built-in `node:sqlite` module. `npm` is bundled with normal Node.js installs and is used only for the test/update scripts.
 - Windows PowerShell 6 or newer for the install, update, and uninstall scripts.
 - Git, if using the update script to pull newer versions from the repository.
 
 ## Quick handoff checklist
 
-1. Install Copilot CLI, sign in, and confirm extensions are supported.
-2. Install Node.js 24 or newer. A normal Node.js install includes `npm`.
-3. Clone or copy this repository.
-4. From the repository root, run:
+1. Install Copilot CLI and sign in.
+2. Enable experimental mode by launching with `copilot --experimental` or using `/experimental` inside Copilot CLI. The setting is persisted after it is enabled.
+3. Install Node.js 24 or newer. A normal Node.js install includes `npm`.
+4. Clone or copy this repository.
+5. From the repository root, run:
 
 ```powershell
 npm test
 npm run install:extension
 ```
 
-5. Reload Copilot CLI extensions by starting a new session, using `/clear`, or asking a session with tool access to call `extensions_reload`.
-6. On first launch in a directory, approve AgentRelay's extension permission prompt. Choose the "always allow" option if you want Copilot CLI to remember that decision for that directory.
+6. Reload Copilot CLI extensions by starting a new session, using `/clear`, or asking a session with tool access to call `extensions_reload`.
+7. On first launch in a directory, approve AgentRelay's extension permission prompt. Choose the "always allow" option if you want Copilot CLI to remember that decision for that directory.
 
 ## Extension runtime note
 
@@ -67,7 +68,9 @@ Manual copy should produce this flat layout:
 
 Copilot CLI discovers the extension from `extension.mjs`; AgentRelay does not install npm dependencies in the extension directory.
 
-If the extension does not load after copying those files, check `node --version`. Node.js 22 is not enough for AgentRelay because `node:sqlite` is built into Node.js 24+.
+If the extension is not discovered after copying those files, first confirm Copilot CLI experimental mode is enabled. Without experimental mode, Copilot CLI may ignore user extensions even when the files are in the correct directory.
+
+If the extension is discovered but fails at runtime, check `node --version`. AgentRelay is tested and supported on Node.js 24+ because it depends on the built-in `node:sqlite` module.
 
 ## Update locally
 
