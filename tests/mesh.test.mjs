@@ -6,15 +6,28 @@ import test from "node:test";
 
 import { getDefaultConfigPath, readAgentRelaySettings } from "../src/config.mjs";
 import { openAgentRelayDatabase } from "../src/db.mjs";
-import { AgentRelayRuntime, createAgentRelayTools, formatRelayPrompt, readRuntimeConfig } from "../src/mesh.mjs";
+import {
+    AgentRelayRuntime,
+    createAgentRelayCommands,
+    createAgentRelayTools,
+    formatRelayPrompt,
+    readRuntimeConfig,
+} from "../src/mesh.mjs";
 import { LocalSqliteTransport } from "../src/transport-local-sqlite.mjs";
 
 class FakeSession {
-    constructor(sessionId) {
+    constructor(sessionId, options = {}) {
         this.sessionId = sessionId;
         this.workspacePath = `C:\\sessions\\${sessionId}`;
         this.sent = [];
         this.logs = [];
+        if ("friendlyName" in options) {
+            this.rpc = {
+                name: {
+                    get: async () => ({ name: options.friendlyName }),
+                },
+            };
+        }
     }
 
     async send(options) {
@@ -289,6 +302,79 @@ test("send tool can target all sessions in a repository", async () => {
         const messages = transport.listMessages({ sessionId: "repo-one", direction: "inbox" });
         assert.equal(messages.length, 1);
         assert.equal(messages[0].body, "Please coordinate on the mobile work.");
+    });
+});
+
+test("runtime captures and tools display Copilot CLI friendly session names", async () => {
+    await withRuntime(async (transport) => {
+        const now = Date.now();
+        const fakeSession = new FakeSession("target", { friendlyName: "Investigate issue 1" });
+        const runtime = new AgentRelayRuntime({
+            session: fakeSession,
+            transport,
+            cwd: "C:\\workspace\\target",
+        });
+
+        runtime.register({ friendlyName: await runtime.getFriendlyName(), now });
+        transport.registerSession({
+            sessionId: "sender",
+            alias: "sender",
+            friendlyName: "Sender session",
+            now,
+        });
+
+        const tools = createAgentRelayTools(() => runtime);
+        const whoami = tools.find((tool) => tool.name === "agent_relay_whoami");
+        const listSessions = tools.find((tool) => tool.name === "agent_relay_list_sessions");
+        const sendMessage = tools.find((tool) => tool.name === "agent_relay_send_message");
+
+        assert.match(whoami.handler(), /Copilot CLI name: Investigate issue 1/);
+        assert.match(listSessions.handler(), /Copilot CLI name/);
+        assert.match(listSessions.handler(), /Investigate issue 1/);
+
+        const result = sendMessage.handler({
+            target: "Sender session",
+            targetType: "name",
+            message: "Hello by friendly name.",
+        });
+        assert.match(result, /Queued AgentRelay message/);
+        const messages = transport.listMessages({ sessionId: "sender", direction: "inbox" });
+        assert.equal(messages[0].body, "Hello by friendly name.");
+    });
+});
+
+test("slash commands log deterministic session views and update aliases", async () => {
+    await withRuntime(async (transport) => {
+        transport.registerSession({
+            sessionId: "target",
+            friendlyName: "Slash command target",
+            cwd: "C:\\workspace\\target",
+            now: 1000,
+        });
+
+        const fakeSession = new FakeSession("target");
+        const runtime = new AgentRelayRuntime({
+            session: fakeSession,
+            transport,
+            cwd: "C:\\workspace\\target",
+        });
+        const commands = createAgentRelayCommands(
+            () => runtime,
+            () => fakeSession
+        );
+        const sessions = commands.find((command) => command.name === "agent-relay-sessions");
+        const whoami = commands.find((command) => command.name === "agent-relay-whoami");
+        const alias = commands.find((command) => command.name === "agent-relay-alias");
+
+        await sessions.handler({ args: "" });
+        assert.match(fakeSession.logs.at(-1).message, /Slash command target/);
+
+        await whoami.handler({ args: "" });
+        assert.match(fakeSession.logs.at(-1).message, /AgentRelay session/);
+
+        await alias.handler({ args: "worker-one" });
+        assert.match(fakeSession.logs.at(-1).message, /worker-one/);
+        assert.equal(transport.getSession("target").alias, "worker-one");
     });
 });
 
