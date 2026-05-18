@@ -96,6 +96,41 @@ test("ignores stale aliases when resolving targets", async () => {
     });
 });
 
+test("resolves active sessions by Copilot CLI friendly name after aliases", async () => {
+    await withTransport((transport) => {
+        transport.registerSession({ sessionId: "sender", alias: "sender", now: 1000 });
+        transport.registerSession({
+            sessionId: "alias-match",
+            alias: "friendly-worker",
+            friendlyName: "Different friendly name",
+            now: 1000,
+        });
+        transport.registerSession({
+            sessionId: "name-match",
+            friendlyName: "Friendly Worker",
+            now: 1000,
+        });
+
+        const aliasResolved = transport.resolveTarget("friendly-worker", { now: 1100 });
+        assert.equal(aliasResolved.sessionId, "alias-match");
+
+        const nameResolved = transport.resolveTarget("Friendly Worker", { targetType: "name", now: 1100 });
+        assert.equal(nameResolved.sessionId, "name-match");
+
+        const autoNameResolved = transport.resolveTarget("Friendly Worker", { now: 1100 });
+        assert.equal(autoNameResolved.sessionId, "name-match");
+    });
+});
+
+test("rejects ambiguous Copilot CLI friendly names", async () => {
+    await withTransport((transport) => {
+        transport.registerSession({ sessionId: "one", friendlyName: "Shared Name", now: 1000 });
+        transport.registerSession({ sessionId: "two", friendlyName: "Shared Name", now: 1000 });
+
+        assert.throws(() => transport.resolveTarget("Shared Name", { now: 1100 }), AmbiguousTargetError);
+    });
+});
+
 test("resolves sessions by directory name and repository name", async () => {
     await withTransport((transport) => {
         transport.registerSession({
@@ -214,6 +249,7 @@ test("migrates existing databases before creating repo indexes", async () => {
         const columns = db.prepare("PRAGMA table_info(sessions)").all().map((row) => row.name);
         assert.equal(columns.includes("repo_root"), true);
         assert.equal(columns.includes("repo_name"), true);
+        assert.equal(columns.includes("friendly_name"), true);
 
         db.prepare("INSERT INTO sessions (session_id, cwd, repo_name, status, created_at, updated_at, last_seen_at) VALUES (?, ?, ?, 'active', ?, ?, ?)")
             .run("session", "C:\\workspace\\repo", "repo", 1000, 1000, 1000);

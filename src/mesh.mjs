@@ -5,6 +5,7 @@ import {
     AmbiguousTargetError,
     UnknownTargetError,
     ValidationError,
+    normalizeFriendlyName,
 } from "./transport-local-sqlite.mjs";
 import { createWorkContext } from "./work-context.mjs";
 
@@ -74,6 +75,7 @@ export class AgentRelayRuntime {
         if (extra.cwd) this.updateCwd(extra.cwd);
         return this.transport.registerSession({
             sessionId: this.sessionId,
+            friendlyName: extra.friendlyName,
             cwd: this.workContext.cwd,
             repoRoot: this.workContext.repoRoot,
             repoName: this.workContext.repoName,
@@ -83,9 +85,10 @@ export class AgentRelayRuntime {
         });
     }
 
-    touch(cwd = this.cwd) {
+    touch(cwd = this.cwd, extra = {}) {
         this.updateCwd(cwd);
         return this.transport.touchSession(this.sessionId, {
+            friendlyName: extra.friendlyName,
             cwd: this.workContext.cwd,
             repoRoot: this.workContext.repoRoot,
             repoName: this.workContext.repoName,
@@ -102,6 +105,14 @@ export class AgentRelayRuntime {
             workspacePath: this.session.workspacePath,
             pid: process.pid,
         });
+    }
+
+    async getFriendlyName() {
+        const getName = this.session.rpc?.name?.get;
+        if (typeof getName !== "function") return null;
+
+        const result = await getName.call(this.session.rpc.name);
+        return normalizeFriendlyName(result?.name);
     }
 
     sendMessage(target, message, options = {}) {
@@ -326,7 +337,7 @@ export function createAgentRelayTools(getRuntime) {
                     target: {
                         type: "string",
                         description:
-                            "Target session ID, AgentRelay alias, directory name/path, or repository name/path.",
+                            "Target session ID, AgentRelay alias, Copilot CLI friendly session name, directory name/path, or repository name/path.",
                     },
                     message: {
                         type: "string",
@@ -341,9 +352,9 @@ export function createAgentRelayTools(getRuntime) {
                     },
                     targetType: {
                         type: "string",
-                        enum: ["auto", "session", "alias", "directory", "repo"],
+                        enum: ["auto", "session", "alias", "name", "directory", "repo"],
                         description:
-                            "How to interpret target. 'auto' tries session ID, alias, directory, then repo.",
+                            "How to interpret target. 'auto' tries session ID, alias, Copilot CLI friendly name, directory, then repo.",
                         default: "auto",
                     },
                     sendToAll: {
@@ -426,6 +437,59 @@ export function createAgentRelayTools(getRuntime) {
                     limit: args.limit ?? 20,
                 });
                 return formatMessages(messages);
+            },
+        },
+    ];
+}
+
+export function createAgentRelayCommands(getRuntime, getSession) {
+    return [
+        {
+            name: "agent-relay-sessions",
+            description: "Show local AgentRelay sessions that can receive messages.",
+            handler: async () => {
+                const runtime = requireRuntime(getRuntime);
+                runtime.touch();
+                const sessions = runtime.transport.listSessions({
+                    includeStale: false,
+                    limit: 25,
+                    staleAfterMs: runtime.staleAfterMs,
+                });
+                await logCommandResult(getSession, formatSessions(sessions));
+            },
+        },
+        {
+            name: "agent-relay-whoami",
+            description: "Show this session's AgentRelay identity.",
+            handler: async () => {
+                const runtime = requireRuntime(getRuntime);
+                await logCommandResult(getSession, formatWhoami(runtime.describeSelf()));
+            },
+        },
+        {
+            name: "agent-relay-alias",
+            description: "Set this session's AgentRelay alias. Usage: /agent-relay-alias <alias>",
+            handler: async (context) => {
+                const alias = String(context?.args ?? "").trim();
+                if (!alias) {
+                    await logCommandResult(getSession, "Usage: /agent-relay-alias <alias>");
+                    return;
+                }
+
+                const runtime = requireRuntime(getRuntime);
+                try {
+                    const session = runtime.setAlias(alias);
+                    await logCommandResult(
+                        getSession,
+                        `AgentRelay alias set to '${session.alias}' for session ${session.sessionId}.`
+                    );
+                } catch (error) {
+                    if (error instanceof ValidationError) {
+                        await logCommandResult(getSession, error.message, { level: "error" });
+                        return;
+                    }
+                    throw error;
+                }
             },
         },
     ];
@@ -533,6 +597,7 @@ function formatWhoami(info) {
         "AgentRelay session",
         `- Session ID: ${info.sessionId}`,
         `- Alias: ${info.alias ?? "(not set)"}`,
+        `- Copilot CLI name: ${info.friendlyName ?? "(not set)"}`,
         `- Repo: ${info.repoName ?? "(none)"}`,
         `- Repo root: ${info.repoRoot ?? "(none)"}`,
         `- Status: ${info.status}`,
@@ -552,15 +617,26 @@ function formatWhoami(info) {
 
 function formatSessions(sessions) {
     if (sessions.length === 0) return "No AgentRelay sessions found.";
-    const lines = ["| Alias | Repo | Status | Session ID | Last seen | CWD |", "| --- | --- | --- | --- | --- | --- |"];
+    const lines = [
+        "| Alias | Copilot CLI name | Repo | Status | Session ID | Last seen | CWD |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
+    ];
     for (const session of sessions) {
         lines.push(
-            `| ${escapeCell(session.alias ?? "")} | ${escapeCell(session.repoName ?? "")} | ${escapeCell(session.status)} | ${escapeCell(
-                session.sessionId
-            )} | ${escapeCell(new Date(session.lastSeenAt).toISOString())} | ${escapeCell(session.cwd ?? "")} |`
+            `| ${escapeCell(session.alias ?? "")} | ${escapeCell(session.friendlyName ?? "")} | ${escapeCell(
+                session.repoName ?? ""
+            )} | ${escapeCell(session.status)} | ${escapeCell(session.sessionId)} | ${escapeCell(
+                new Date(session.lastSeenAt).toISOString()
+            )} | ${escapeCell(session.cwd ?? "")} |`
         );
     }
     return lines.join("\n");
+}
+
+async function logCommandResult(getSession, text, options = {}) {
+    const session = getSession();
+    if (!session?.log) throw new Error("AgentRelay slash commands require session.log support.");
+    await session.log(text, options);
 }
 
 function formatMessages(messages) {

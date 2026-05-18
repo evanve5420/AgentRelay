@@ -104,11 +104,19 @@ AgentRelay registers these Copilot CLI extension tools:
 
 | Tool | Purpose |
 | --- | --- |
-| `agent_relay_whoami` | Show this session's AgentRelay identity, alias, repo, cwd, workspace, and database path. |
+| `agent_relay_whoami` | Show this session's AgentRelay identity, alias, Copilot CLI friendly name, repo, cwd, workspace, and database path. |
 | `agent_relay_set_alias` | Set a short alias for the current session. |
-| `agent_relay_list_sessions` | List active or recent local sessions, including repo and cwd. |
-| `agent_relay_send_message` | Send a message by session ID, alias, directory, or repo. Defaults to queued delivery and can request immediate delivery. |
+| `agent_relay_list_sessions` | List active or recent local sessions, including Copilot CLI friendly name, repo, and cwd. |
+| `agent_relay_send_message` | Send a message by session ID, alias, Copilot CLI friendly name, directory, or repo. Defaults to queued delivery and can request immediate delivery. |
 | `agent_relay_read_messages` | Read this session's AgentRelay message history without injecting messages. |
+
+AgentRelay also registers these Copilot CLI slash commands when the host TUI supports extension commands:
+
+| Slash command | Purpose |
+| --- | --- |
+| `/agent-relay-sessions` | Show active local AgentRelay sessions directly in the timeline. |
+| `/agent-relay-whoami` | Show this session's AgentRelay identity directly in the timeline. |
+| `/agent-relay-alias <alias>` | Set this session's AgentRelay alias without asking the agent to call a tool. |
 
 Example flow:
 
@@ -122,8 +130,8 @@ Example flow:
 
 | Option | Values | Purpose |
 | --- | --- | --- |
-| `target` | string | Session ID, AgentRelay alias, directory name/path, or repository name/path. |
-| `targetType` | `auto`, `session`, `alias`, `directory`, `repo` | How to interpret `target`. `auto` tries session ID, alias, directory, then repo. |
+| `target` | string | Session ID, AgentRelay alias, Copilot CLI friendly session name, directory name/path, or repository name/path. |
+| `targetType` | `auto`, `session`, `alias`, `name`, `directory`, `repo` | How to interpret `target`. `auto` tries session ID, AgentRelay alias, Copilot CLI friendly name, directory, then repo. |
 | `sendToAll` | boolean | Send to every matching session instead of failing on multiple matches. Useful for "all agents working in this repo." |
 | `includeSelf` | boolean | Include the sending session when `sendToAll` is used. Defaults to false. |
 
@@ -131,6 +139,7 @@ Examples:
 
 - "Tell the agent working on the `scheduler-service` directory to rerun the scheduler tests" -> use `target: "scheduler-service"`, `targetType: "directory"`.
 - "Tell all agents working in `mobile-app` repo to sync on auth changes" -> use `target: "mobile-app"`, `targetType: "repo"`, `sendToAll: true`.
+- "Tell the session renamed to `frontend review` to check the UI" -> use `target: "frontend review"`, `targetType: "name"`.
 
 `agent_relay_send_message` supports these delivery modes:
 
@@ -188,5 +197,6 @@ AgentRelay does not expose a cleanup tool. On extension startup or reload, it ma
 - v0 only routes messages between sessions on the same machine.
 - Existing Copilot CLI sessions must reload extensions or restart before they participate.
 - Aliases are not globally reserved. If multiple active sessions use the same alias, sending by alias fails and asks for a session ID.
-- Copilot CLI session names are evolving. AgentRelay currently routes by session ID or alias; CLI-friendly-name routing can be added once the name exposed by the SDK is stable enough for addressing.
+- Copilot CLI friendly names are not globally reserved and can be long, duplicated, mutable, or fallback summaries. If multiple active sessions use the same friendly name, sending by name fails clearly unless `sendToAll` is set.
+- AgentRelay aliases remain the recommended short, stable override when friendly names are ambiguous or inconvenient.
 - `node:sqlite` is currently experimental in Node.js, so Node may emit an experimental warning.

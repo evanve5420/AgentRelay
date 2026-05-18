@@ -1,7 +1,7 @@
 import { joinSession } from "@github/copilot-sdk/extension";
 import { readAgentRelaySettings } from "./config.mjs";
 import { getDefaultDatabasePath, openAgentRelayDatabase } from "./db.mjs";
-import { AgentRelayRuntime, createAgentRelayTools, readRuntimeConfig } from "./mesh.mjs";
+import { AgentRelayRuntime, createAgentRelayCommands, createAgentRelayTools, readRuntimeConfig } from "./mesh.mjs";
 import { LocalSqliteTransport } from "./transport-local-sqlite.mjs";
 
 const { configPath, settings } = readAgentRelaySettings();
@@ -11,19 +11,23 @@ const transport = new LocalSqliteTransport(db, dbPath);
 const runtimeConfig = readRuntimeConfig(process.env, settings);
 
 let runtime;
+let session;
 
-const session = await joinSession({
+session = await joinSession({
     tools: createAgentRelayTools(() => runtime),
+    commands: createAgentRelayCommands(
+        () => runtime,
+        () => session
+    ),
     hooks: {
         onSessionStart: async (input) => {
             if (runtime) {
-                runtime.updateCwd(input.cwd);
-                runtime.register();
+                await registerRuntime({ cwd: input.cwd });
             }
         },
         onUserPromptSubmitted: async (input) => {
             if (runtime) {
-                runtime.touch(input.cwd);
+                await touchRuntime(input.cwd);
                 runtime.markTurnRunning(input.timestamp);
             }
         },
@@ -38,7 +42,7 @@ runtime = new AgentRelayRuntime({
     ...runtimeConfig,
 });
 
-runtime.register();
+await registerRuntime();
 runtime.runStartupMaintenance();
 runtime.start();
 
@@ -67,4 +71,33 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
         transport.close();
         process.exit(0);
     });
+}
+
+async function registerRuntime(extra = {}) {
+    runtime.register({
+        ...extra,
+        friendlyName: await getFriendlyNameForRegistration(),
+    });
+}
+
+async function touchRuntime(cwd) {
+    runtime.touch(cwd, {
+        friendlyName: await getFriendlyNameForRegistration(),
+    });
+}
+
+async function getFriendlyNameForRegistration() {
+    try {
+        return await runtime.getFriendlyName();
+    } catch (error) {
+        await session.log(`AgentRelay could not read Copilot CLI session name: ${formatError(error)}`, {
+            level: "warning",
+        });
+        return undefined;
+    }
+}
+
+function formatError(error) {
+    if (error instanceof Error) return error.message;
+    return String(error);
 }

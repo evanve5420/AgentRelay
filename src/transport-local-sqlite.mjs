@@ -8,7 +8,7 @@ export const MAX_MESSAGE_LENGTH = 20000;
 const MESSAGE_STATUSES = new Set(["pending", "claimed", "delivered", "failed"]);
 const MESSAGE_DIRECTIONS = new Set(["inbox", "sent", "all"]);
 const DELIVERY_MODES = new Set(["queued", "immediate"]);
-const TARGET_TYPES = new Set(["auto", "session", "alias", "directory", "repo"]);
+const TARGET_TYPES = new Set(["auto", "session", "alias", "name", "directory", "repo"]);
 
 export class AgentRelayError extends Error {
     constructor(message) {
@@ -45,6 +45,7 @@ export class LocalSqliteTransport {
         const now = normalizeTimestamp(session.now);
         const sessionId = normalizeSessionId(session.sessionId);
         const alias = session.alias === undefined ? null : normalizeAlias(session.alias);
+        const friendlyName = session.friendlyName === undefined ? null : normalizeFriendlyName(session.friendlyName);
         const cwd = nullableString(session.cwd);
         const repoRoot = nullableString(session.repoRoot);
         const repoName = nullableString(session.repoName);
@@ -55,12 +56,13 @@ export class LocalSqliteTransport {
 
         this.db.prepare(`
             INSERT INTO sessions (
-                session_id, alias, cwd, repo_root, repo_name, workspace_path, pid, transport, account_hint,
+                session_id, alias, friendly_name, cwd, repo_root, repo_name, workspace_path, pid, transport, account_hint,
                 status, created_at, updated_at, last_seen_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
             ON CONFLICT(session_id) DO UPDATE SET
                 alias = COALESCE(excluded.alias, sessions.alias),
+                friendly_name = COALESCE(excluded.friendly_name, sessions.friendly_name),
                 cwd = excluded.cwd,
                 repo_root = excluded.repo_root,
                 repo_name = excluded.repo_name,
@@ -71,7 +73,7 @@ export class LocalSqliteTransport {
                 status = 'active',
                 updated_at = excluded.updated_at,
                 last_seen_at = excluded.last_seen_at
-        `).run(sessionId, alias, cwd, repoRoot, repoName, workspacePath, pid, transport, accountHint, now, now, now);
+        `).run(sessionId, alias, friendlyName, cwd, repoRoot, repoName, workspacePath, pid, transport, accountHint, now, now, now);
 
         return this.getSession(sessionId);
     }
@@ -81,12 +83,15 @@ export class LocalSqliteTransport {
         const cwd = updates.cwd === undefined ? undefined : nullableString(updates.cwd);
         const repoRoot = updates.repoRoot === undefined ? undefined : nullableString(updates.repoRoot);
         const repoName = updates.repoName === undefined ? undefined : nullableString(updates.repoName);
+        const friendlyName =
+            updates.friendlyName === undefined ? undefined : normalizeFriendlyName(updates.friendlyName);
         const workspacePath =
             updates.workspacePath === undefined ? undefined : nullableString(updates.workspacePath);
         const session = this.getSession(sessionId);
         if (!session) {
             return this.registerSession({
                 sessionId,
+                friendlyName,
                 cwd,
                 repoRoot,
                 repoName,
@@ -101,13 +106,24 @@ export class LocalSqliteTransport {
             SET cwd = COALESCE(?, cwd),
                 repo_root = COALESCE(?, repo_root),
                 repo_name = COALESCE(?, repo_name),
+                friendly_name = COALESCE(?, friendly_name),
                 workspace_path = COALESCE(?, workspace_path),
                 pid = COALESCE(?, pid),
                 status = 'active',
                 updated_at = ?,
                 last_seen_at = ?
             WHERE session_id = ?
-        `).run(cwd, repoRoot, repoName, workspacePath, Number.isInteger(updates.pid) ? updates.pid : null, now, now, sessionId);
+        `).run(
+            cwd,
+            repoRoot,
+            repoName,
+            friendlyName ?? null,
+            workspacePath,
+            Number.isInteger(updates.pid) ? updates.pid : null,
+            now,
+            now,
+            sessionId
+        );
 
         return this.getSession(sessionId);
     }
@@ -122,11 +138,14 @@ export class LocalSqliteTransport {
 
     setAlias(sessionId, alias, details = {}) {
         const normalizedAlias = normalizeAlias(alias);
+        const friendlyName =
+            details.friendlyName === undefined ? undefined : normalizeFriendlyName(details.friendlyName);
         const existing = this.getSession(sessionId);
         if (!existing) {
             return this.registerSession({
                 sessionId,
                 alias: normalizedAlias,
+                friendlyName,
                 cwd: details.cwd,
                 repoRoot: details.repoRoot,
                 repoName: details.repoName,
@@ -140,6 +159,7 @@ export class LocalSqliteTransport {
         this.db.prepare(`
             UPDATE sessions
             SET alias = ?,
+                friendly_name = COALESCE(?, friendly_name),
                 cwd = COALESCE(?, cwd),
                 repo_root = COALESCE(?, repo_root),
                 repo_name = COALESCE(?, repo_name),
@@ -151,6 +171,7 @@ export class LocalSqliteTransport {
             WHERE session_id = ?
         `).run(
             normalizedAlias,
+            friendlyName ?? null,
             nullableString(details.cwd),
             nullableString(details.repoRoot),
             nullableString(details.repoName),
@@ -234,6 +255,11 @@ export class LocalSqliteTransport {
             matchedBy = "alias";
         }
 
+        if (matches.length === 0 && (targetType === "name" || targetType === "auto")) {
+            matches = this.findFriendlyNameTargets(value);
+            matchedBy = "name";
+        }
+
         if (matches.length === 0 && (targetType === "directory" || targetType === "auto")) {
             matches = this.findDirectoryTargets(value, options);
             matchedBy = "directory";
@@ -278,6 +304,25 @@ export class LocalSqliteTransport {
                 ORDER BY last_seen_at DESC
             `)
             .all(alias)
+            .map(mapSession);
+    }
+
+    findFriendlyNameTargets(value) {
+        let friendlyName;
+        try {
+            friendlyName = normalizeFriendlyName(value);
+        } catch {
+            return [];
+        }
+        if (!friendlyName) return [];
+        return this.db
+            .prepare(`
+                SELECT *
+                FROM sessions
+                WHERE friendly_name = ? AND status = 'active'
+                ORDER BY last_seen_at DESC
+            `)
+            .all(friendlyName)
             .map(mapSession);
     }
 
@@ -510,6 +555,15 @@ export function normalizeAlias(alias) {
     return normalized;
 }
 
+export function normalizeFriendlyName(name) {
+    const normalized = nullableString(name);
+    if (normalized === null) return null;
+    if (normalized.length > 200) {
+        throw new ValidationError("Friendly session name must be 200 characters or fewer.");
+    }
+    return normalized;
+}
+
 function normalizeSessionId(sessionId) {
     const value = String(sessionId ?? "").trim();
     if (!value) throw new ValidationError("Session ID is required.");
@@ -536,7 +590,7 @@ export function normalizeDeliveryMode(mode) {
 export function normalizeTargetType(type) {
     const normalized = String(type ?? "auto").trim().toLowerCase();
     if (!TARGET_TYPES.has(normalized)) {
-        throw new ValidationError("Target type must be 'auto', 'session', 'alias', 'directory', or 'repo'.");
+        throw new ValidationError("Target type must be 'auto', 'session', 'alias', 'name', 'directory', or 'repo'.");
     }
     return normalized;
 }
@@ -580,6 +634,7 @@ function mapSession(row) {
     return {
         sessionId: row.session_id,
         alias: row.alias,
+        friendlyName: row.friendly_name,
         cwd: row.cwd,
         repoRoot: row.repo_root,
         repoName: row.repo_name,
